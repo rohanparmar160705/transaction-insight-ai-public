@@ -13,9 +13,7 @@ Thumbs.db
 *.swo
 
 # Environment files
-.env
-.env.*
-!.env.example
+
 
 # Node and Python lockfiles (kept only one canonical version)
 package-lock.json
@@ -38,9 +36,7 @@ backend/node_modules/
 backend/uploads/
 backend/prisma/*.db
 backend/prisma/migrations/
-backend/.env
-backend/.env.*
-!backend/.env.example
+
 backend/package-lock.json
 
 # ===================================================
@@ -48,9 +44,6 @@ backend/package-lock.json
 # ===================================================
 frontend/node_modules/
 frontend/dist/
-frontend/.env
-frontend/.env.*
-!frontend/.env.example
 frontend/package-lock.json
 
 # ===================================================
@@ -58,9 +51,6 @@ frontend/package-lock.json
 # ===================================================
 ml-service/__pycache__/
 ml-service/venv/
-ml-service/.env
-ml-service/.env.*
-!ml-service/.env.example
 ml-service/*.joblib
 ml-service/*.pkl
 ml-service/*.csv
@@ -85,8 +75,7 @@ ml-service/*.log
 # ===================================================
 # Ignore Python virtual environment folders globally
 venv/
-env/
-ENV/
+
 *.egg-info/
 .eggs/
 site/
