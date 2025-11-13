@@ -1,3 +1,38 @@
+# ---------------------------------------------------------------------------
+# Keyword-based post-correction rules for strong signals
+# ---------------------------------------------------------------------------
+from typing import Optional
+def keyword_category_override(raw_description: str) -> Optional[str]:
+    desc = (raw_description or '').lower()
+    # Income / deposits
+    if any(k in desc for k in ['salary', 'paycheck', 'deposit', 'refund', 'dividend', 'interest']):
+        return 'Income'
+    # Transfers
+    if any(k in desc for k in ['transfer', 'savings account', 'saving account']):
+        return 'Transfer'
+    # Bills / Utilities
+    if any(k in desc for k in ['bill', 'electricity', 'internet', 'mobile', 'wireless', 'water']):
+        return 'Bills'
+    # Subscriptions / Entertainment
+    if any(k in desc for k in ['netflix', 'spotify', 'youtube', 'steam']):
+        return 'Entertainment'
+    # Travel / Transportation
+    if any(k in desc for k in ['flight', 'airline', 'airbnb', 'hotel', 'uber', 'lyft', 'ticket']):
+        return 'Travel'
+    # Insurance
+    if any(k in desc for k in ['insurance', 'premium']):
+        return 'Insurance'
+    # Food / Groceries / Restaurants
+    if any(k in desc for k in ['grocery', 'groceries', 'walmart', 'costco', 'restaurant', 'food', 'panera', 'chipotle', 'starbucks']):
+        return 'Food'
+    # Rent / Mortgage
+    if any(k in desc for k in ['rent', 'mortgage']):
+        return 'Rent'
+    # Shopping
+    if any(k in desc for k in ['amazon', 'best buy', 'home depot']):
+        return 'Shopping'
+    return None
+
 """
 Transaction Classification ML Service
 ======================================
@@ -315,9 +350,12 @@ async def predict_categories(request: SimpleTextRequest):
         
         # Step 5: Standardize categories and build response
         results = []
-        for category, confidence in zip(predicted_categories, confidences):
+        for i, (category, confidence) in enumerate(zip(predicted_categories, confidences)):
+            # Apply keyword override if strong signal detected
+            override = keyword_category_override(request.descriptions[i])
+            final_category = standardize_category(override or category)
             results.append(PredictionResult(
-                category=standardize_category(category),
+                category=final_category,
                 confidence=float(confidence)
             ))
         
@@ -432,9 +470,11 @@ async def predict_batch(request: PredictionRequest):
             # Log low-confidence predictions for monitoring
             if confidence < 0.5:
                 print(f"⚠️  Low confidence prediction: '{descriptions[i]}' → {category} ({confidence:.2f})")
-            
+            # Apply keyword override if strong signal detected
+            override = keyword_category_override(descriptions[i])
+            final_category = standardize_category(override or category)
             results.append(PredictionResult(
-                category=standardize_category(category),
+                category=final_category,
                 confidence=float(confidence)
             ))
         

@@ -489,3 +489,18 @@ For issues or questions:
 1. Check logs: `docker logs ml-service`
 2. Verify models are trained: `ls -la models/`
 3. Test health endpoint: `curl http://localhost:8000/health`
+
+
+
+
+Steps (run in PowerShell from ml-service folder)
+Upgrade core tools
+.\venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+Install dependencies
+.\venv\Scripts\pip.exe install -r requirements.txt
+Train the model (skip if model.joblib exists)
+.\venv\Scripts\python.exe .\train_model.py
+Start the FastAPI server on port 8000
+.\venv\Scripts\uvicorn.exe app:app --host 0.0.0.0 --port 8000 --reload
+Verify health
+Invoke-RestMethod http://localhost:8000/health | ConvertTo-Json

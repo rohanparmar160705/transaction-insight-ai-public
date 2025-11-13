@@ -13,7 +13,7 @@
 
 import { useState, useEffect } from 'react';
 import { Calendar, DollarSign, TrendingUp, TrendingDown, PieChart } from 'lucide-react';
-import { transactionsAPI, InsightsData } from '../api/api';
+import { transactionsAPI, InsightsData, Transaction } from '../api/api';
 import { CategoryPieChart, MonthlyTrendChart, TopExpensesChart, StatCard } from '../components/Charts';
 
 const InsightsPage: React.FC = () => {
@@ -22,9 +22,9 @@ const InsightsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Date range filter (default: last 6 months)
+  // Date range filter (default: last 36 months)
   const [dateRange, setDateRange] = useState({
-    startDate: new Date(new Date().setMonth(new Date().getMonth() - 6))
+    startDate: new Date(new Date().setMonth(new Date().getMonth() - 36))
       .toISOString()
       .split('T')[0],
     endDate: new Date().toISOString().split('T')[0],
@@ -43,11 +43,117 @@ const InsightsPage: React.FC = () => {
         endDate: dateRange.endDate,
       });
 
-      if (response.success) {
-        setInsights(response.data);
-      } else {
+      if (!response.success) {
         setError(response.error || 'Failed to fetch insights');
+        setLoading(false);
+        return;
       }
+
+      const incoming: InsightsData = response.data;
+
+      // Always compute breakdown and totals from transactions to ensure correctness
+      let txRes = await transactionsAPI.getTransactions({
+        page: 1,
+        limit: 1000,
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+      });
+
+      // Fallback: retry without date filters if server rejects them
+      if (!txRes.success) {
+        txRes = await transactionsAPI.getTransactions({ page: 1, limit: 1000 });
+      }
+
+      if (txRes.success) {
+        const txns: Transaction[] = txRes.data.transactions || [];
+        const expenseCategories = new Set([
+          'FOOD','TRANSPORTATION','ENTERTAINMENT','SHOPPING','BILLS','TRAVEL','INSURANCE','INVESTMENT','UTILITIES','GROCERIES','RENT','HEALTHCARE','EDUCATION','FEES','TAX','SUBSCRIPTION'
+        ]);
+
+        const sums: Record<string, { total: number; count: number }> = {};
+        const monthly: Record<string, { income: number; expenses: number }> = {};
+        const expenseRows: { description: string; amount: number; date: string; category: string }[] = [];
+        let totalExpenses = 0;
+        let totalIncome = 0;
+
+        for (const t of txns) {
+          const rawType = (t.type || '').toUpperCase();
+          const categoryUpper = (t.category || '').toUpperCase();
+          const desc = (t.description || '').toLowerCase();
+          const incomeKeywords = ['salary','paycheck','refund','dividend','interest','deposit'];
+          const expenseKeywords = ['bill','subscription','rent','mortgage','airline','flight','hotel','uber','lyft','walmart','costco','amazon','best buy','home depot','restaurant','chipotle','starbucks','insurance','premium','gym','electricity','internet','mobile','water','steam','netflix','spotify','youtube'];
+          const transferKeywords = ['transfer','savings account','saving account'];
+
+          const incomeSignal = categoryUpper === 'INCOME' || incomeKeywords.some(k => desc.includes(k));
+          const expenseSignal = expenseCategories.has(categoryUpper) || expenseKeywords.some(k => desc.includes(k));
+          const transferSignal = categoryUpper === 'TRANSFER' || transferKeywords.some(k => desc.includes(k));
+
+          // Decide debit/credit consistent with table: strong signals first
+          let isDebit: boolean;
+          if (incomeSignal && !expenseSignal) {
+            isDebit = false;
+          } else if (expenseSignal && !incomeSignal) {
+            isDebit = true;
+          } else if (transferSignal) {
+            isDebit = false;
+          } else if (rawType === 'DEBIT' || rawType === 'CREDIT') {
+            isDebit = rawType === 'DEBIT';
+          } else {
+            isDebit = t.amount < 0;
+          }
+
+          const absAmount = Math.abs(t.amount);
+          if (isDebit) {
+            totalExpenses += absAmount;
+            const key = t.category || 'Uncategorized';
+            if (!sums[key]) sums[key] = { total: 0, count: 0 };
+            sums[key].total += absAmount;
+            sums[key].count += 1;
+            // monthly bucket (store expenses as negative total for clarity)
+            const ym = new Date(t.date).toISOString().slice(0, 7);
+            if (!monthly[ym]) monthly[ym] = { income: 0, expenses: 0 };
+            monthly[ym].expenses -= absAmount;
+            // collect for top expenses
+            expenseRows.push({ description: t.description, amount: absAmount, date: t.date, category: t.category });
+          } else {
+            totalIncome += absAmount;
+            const ym = new Date(t.date).toISOString().slice(0, 7);
+            if (!monthly[ym]) monthly[ym] = { income: 0, expenses: 0 };
+            monthly[ym].income += absAmount;
+          }
+        }
+
+        const breakdown = Object.entries(sums).map(([category, { total, count }]) => ({
+          category,
+          total,
+          count,
+          percentage: totalExpenses > 0 ? (total * 100) / totalExpenses : 0,
+        }));
+
+        incoming.categoryBreakdown = breakdown;
+        incoming.totalExpenses = totalExpenses;
+        incoming.totalIncome = totalIncome;
+        incoming.netSavings = totalIncome - totalExpenses;
+        // Monthly trend: sort by month ascending
+        incoming.monthlyTrend = Object.keys(monthly)
+          .sort()
+          .map((month) => ({ month, income: monthly[month].income, expenses: monthly[month].expenses }));
+        // Top expenses: top 10 by amount desc
+        incoming.topExpenses = expenseRows
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, 10);
+      } else {
+        // Final fallback: compute totals from incoming breakdown if available
+        if (incoming.categoryBreakdown && incoming.categoryBreakdown.length > 0) {
+          const totalExpenses = incoming.categoryBreakdown.reduce((sum, item: any) => sum + (item.total || 0), 0);
+          incoming.totalExpenses = totalExpenses;
+          if (typeof incoming.netSavings !== 'number' && typeof incoming.totalIncome === 'number') {
+            incoming.netSavings = incoming.totalIncome - totalExpenses;
+          }
+        }
+      }
+
+      setInsights(incoming);
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to fetch insights';
       setError(errorMessage);
@@ -77,7 +183,7 @@ const InsightsPage: React.FC = () => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(Math.abs(amount));
+    }).format(amount);
   };
 
   // Loading state
@@ -298,7 +404,7 @@ const InsightsPage: React.FC = () => {
                       </td>
                       <td>
                         <span className="text-red-600 font-semibold">
-                          {formatCurrency(expense.amount)}
+                          {formatCurrency(Math.abs(expense.amount))}
                         </span>
                       </td>
                       <td className="whitespace-nowrap">

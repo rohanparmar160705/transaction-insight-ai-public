@@ -44,19 +44,18 @@ ML Concepts Explained:
 
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
 import joblib
-import os
-import sys
-
-# Import our custom utilities
-from utils import clean_text, preprocess_descriptions
-
+import re
+import string
+# Note: NLTK is optional. We avoid importing it at module import time to prevent
+# ModuleNotFoundError in environments where it's not installed. If available,
+# we'll import it lazily inside preprocessing.
 
 # ============================================================================
 # CONFIGURATION
@@ -66,78 +65,124 @@ from utils import clean_text, preprocess_descriptions
 TRAIN_DATA_PATH = 'transactions_train.csv'
 MODEL_OUTPUT_PATH = 'model.joblib'
 
-# Model hyperparameters
-# These control how the model learns
+# Enhanced hyperparameters
+MAX_FEATURES = 10000  # Increased vocabulary size
+MIN_DF = 1
+MAX_DF = 0.95
+NGRAM_RANGE = (1, 2)  # Unigrams and bigrams
 
-# TF-IDF parameters:
-MAX_FEATURES = 5000  # Maximum number of unique words to consider
-MIN_DF = 1  # Minimum documents a word must appear in (1 = include all words)
-MAX_DF = 0.95  # Maximum document frequency (0.95 = exclude words in >95% of docs)
-NGRAM_RANGE = (1, 2)  # Use both single words and pairs of words
+# Logistic Regression with balanced class weights
+MAX_ITER = 1000
+RANDOM_STATE = 42
+TEST_SIZE = 0.2
 
-# Logistic Regression parameters:
-MAX_ITER = 1000  # Maximum training iterations
-C = 1.0  # Regularization strength (lower = more regularization)
-RANDOM_STATE = 42  # For reproducibility
+# ============================================================================
+# ENHANCED TEXT PREPROCESSING
+# ============================================================================
 
-# Train/test split
-TEST_SIZE = 0.2  # 20% of data for testing, 80% for training
+def enhanced_clean_text(text: str) -> str:
+    """
+    Enhanced text cleaning with lemmatization and selective stopword removal
+    """
+    if not isinstance(text, str):
+        return ""
+    
+    # Lowercase
+    text = text.lower()
+    
+    # Remove URLs and emails
+    text = re.sub(r'http\S+|www\S+|\S+@\S+', '', text)
+    
+    # Remove dates and transaction IDs
+    text = re.sub(r'\d+[/-]\d+[/-]\d+', '', text)
+    text = re.sub(r'#\d+', '', text)
+    
+    # Remove special chars but keep spaces
+    text = re.sub(f'[{re.escape(string.punctuation)}]', ' ', text)
+    
+    # Remove generic banking terms (but keep business names)
+    generic_terms = [
+        'purchase', 'payment', 'transaction', 'pos', 'card', 
+        'online', 'mobile', 'recurring', 'automatic', 'withdrawal', 
+        'deposit', 'bill', 'subscription', 'store', 'number'
+    ]
+    
+    words = text.split()
+    
+    # Initialize lemmatizer and stopwords
+    try:
+        # Lazy import to avoid hard dependency
+        from nltk.corpus import stopwords  # type: ignore
+        from nltk.stem import WordNetLemmatizer  # type: ignore
+        lemmatizer = WordNetLemmatizer()
+        stop_words = set(stopwords.words('english'))
+        # Keep important business keywords
+        keep_words = {'netflix', 'spotify', 'uber', 'lyft', 'walmart', 'costco', 
+                     'amazon', 'chipotle', 'starbucks', 'verizon', 'comcast',
+                     'bluecross', 'fidelity', 'airbnb', 'salary', 'paycheck',
+                     'dividend', 'interest', 'refund', 'insurance', 'premium',
+                     'rent', 'mortgage', 'airline', 'flight', 'hotel'}
+        stop_words = stop_words - keep_words
+    except:
+        lemmatizer = None
+        stop_words = set()
+    
+    # Clean and lemmatize
+    cleaned_words = []
+    for word in words:
+        word = word.strip()
+        if len(word) >= 2 and word not in generic_terms:
+            if word not in stop_words or word in keep_words:
+                if lemmatizer:
+                    word = lemmatizer.lemmatize(word)
+                cleaned_words.append(word)
+    
+    text = ' '.join(cleaned_words)
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
+
+def preprocess_descriptions(descriptions):
+    """Batch preprocess descriptions"""
+    return [enhanced_clean_text(desc) for desc in descriptions]
 
 
 # ============================================================================
-# STEP 1: LOAD AND EXPLORE DATA
+# LOAD AND EXPLORE DATA
 # ============================================================================
 
 def load_training_data(filepath: str) -> pd.DataFrame:
-    """
-    Load training data from CSV file.
-    
-    The CSV should have columns:
-    - date: Transaction date
-    - description: Transaction description (what we'll train on)
-    - amount: Transaction amount
-    - type: DEBIT or CREDIT
-    - category: Target label (what we want to predict)
-    
-    Parameters:
-    -----------
-    filepath : str
-        Path to CSV file
-    
-    Returns:
-    --------
-    pd.DataFrame
-        Loaded data
-    """
+    """Load training data from CSV"""
+    print(f"\n{'='*60}")
     print(f"📂 Loading training data from {filepath}...")
+    print(f"{'='*60}")
     
-    # Check if file exists
-    if not os.path.exists(filepath):
+    try:
+        df = pd.read_csv(filepath)
+        print(f"✅ Loaded {len(df)} transactions")
+        print(f"📊 Columns: {list(df.columns)}")
+        
+        # Validate required columns
+        required = ['description', 'category']
+        if not all(col in df.columns for col in required):
+            print(f"❌ Error: Missing required columns. Need: {required}")
+            return None
+        
+        return df
+    except FileNotFoundError:
         print(f"❌ Error: File not found: {filepath}")
-        sys.exit(1)
-    
-    # Load CSV into DataFrame
-    # Pandas automatically detects column types
-    df = pd.read_csv(filepath)
-    
-    print(f"✅ Loaded {len(df)} transactions")
-    print(f"📊 Columns: {list(df.columns)}")
-    
-    return df
+        return None
+    except Exception as e:
+        print(f"❌ Error loading data: {e}")
+        return None
 
 
 def explore_data(df: pd.DataFrame):
-    """
-    Print basic statistics about the training data.
-    
-    This helps us understand:
-    - How many transactions we have
-    - How many categories
-    - If data is balanced (equal examples per category)
-    """
-    print("\n" + "="*60)
+    """Print data statistics"""
+    print(f"\n{'='*60}")
     print("📊 DATA EXPLORATION")
-    print("="*60)
+    print(f"{'='*60}")
     
     # Basic info
     print(f"Total transactions: {len(df)}")
@@ -148,12 +193,12 @@ def explore_data(df: pd.DataFrame):
     category_counts = df['category'].value_counts()
     for category, count in category_counts.items():
         percentage = (count / len(df)) * 100
-        print(f"  {category:15s}: {count:3d} ({percentage:5.1f}%)")
+        print(f"  {category:15s}: {count:4d} ({percentage:5.1f}%)")
     
     # Check for missing values
     missing = df.isnull().sum()
     if missing.any():
-        print(f"\n⚠️  Warning: Missing values detected:")
+        print(f"\n⚠️  Missing values:")
         print(missing[missing > 0])
     else:
         print(f"\n✅ No missing values")
@@ -234,28 +279,10 @@ def preprocess_training_data(df: pd.DataFrame) -> tuple:
 # ============================================================================
 
 def build_model_pipeline() -> Pipeline:
-    """
-    Build ML pipeline with TF-IDF vectorizer and classifier.
-    
-    What is a Pipeline?
-    -------------------
-    A pipeline chains multiple processing steps:
-    1. TfidfVectorizer: Converts text → numbers
-    2. LogisticRegression: Learns patterns to predict category
-    
-    Benefits:
-    - Cleaner code (one object does everything)
-    - Prevents data leakage (ensures test data isn't seen during training)
-    - Easier to save/load (save once, get all steps)
-    
-    Returns:
-    --------
-    Pipeline
-        Sklearn pipeline ready for training
-    """
-    print("\n" + "="*60)
-    print("🏗️  BUILDING MODEL PIPELINE")
-    print("="*60)
+    """Build enhanced ML pipeline"""
+    print(f"\n{'='*60}")
+    print("🏗️  BUILDING ENHANCED MODEL PIPELINE")
+    print(f"{'='*60}")
     
     # Step 1: TF-IDF Vectorizer
     # This converts text to numerical features
@@ -267,25 +294,26 @@ def build_model_pipeline() -> Pipeline:
     
     vectorizer = TfidfVectorizer(
         max_features=MAX_FEATURES,
-        ngram_range=NGRAM_RANGE,  # Use both 1-word and 2-word phrases
+        ngram_range=NGRAM_RANGE,
         min_df=MIN_DF,
         max_df=MAX_DF,
         strip_accents='unicode',
         lowercase=True,
-        token_pattern=r'\b[a-zA-Z]{2,}\b'  # Only keep words with 2+ letters
+        stop_words='english',
+        token_pattern=r'\b[a-zA-Z]{2,}\b'
     )
     
-    # Step 2: Logistic Regression Classifier
-    print("\n🤖 Configuring Logistic Regression:")
+    print(f"\n🤖 Logistic Regression Configuration:")
+    print(f"  - Class weight: balanced (handles imbalanced data)")
     print(f"  - Max iterations: {MAX_ITER}")
-    print(f"  - Regularization (C): {C}")
-    print(f"  - Solver: lbfgs (good for small datasets)")
+    print(f"  - Solver: lbfgs")
     
     classifier = LogisticRegression(
         max_iter=MAX_ITER,
-        C=C,
-        solver='lbfgs',  # Optimization algorithm
-        multi_class='multinomial',  # For multiple categories
+        C=1.0,
+        solver='lbfgs',
+        multi_class='multinomial',
+        class_weight='balanced',  # KEY: Handles imbalanced classes
         random_state=RANDOM_STATE
     )
     
@@ -299,76 +327,25 @@ def build_model_pipeline() -> Pipeline:
     return pipeline
 
 
-def train_model(pipeline: Pipeline, X_train: list, y_train: np.ndarray):
-    """
-    Train the ML model on training data.
-    
-    What happens during training?
-    ------------------------------
-    1. TF-IDF learns vocabulary from training descriptions
-    2. Classifier learns patterns: which words → which categories
-    3. Model adjusts weights to minimize prediction errors
-    
-    This can take a few seconds to minutes depending on data size.
-    
-    Parameters:
-    -----------
-    pipeline : Pipeline
-        Untrained model pipeline
-    X_train : list
-        Training descriptions (cleaned text)
-    y_train : np.ndarray
-        Training labels (encoded categories)
-    """
-    print("\n" + "="*60)
+def train_model_with_cv(pipeline: Pipeline, X_train, y_train):
+    """Train model with optional grid search"""
+    print(f"\n{'='*60}")
     print("🎓 TRAINING MODEL")
-    print("="*60)
+    print(f"{'='*60}")
     
     print(f"📚 Training on {len(X_train)} transactions...")
     print("⏳ This may take a moment...")
     
-    # Train the model
-    # .fit() is where the actual learning happens
+    # Simple training (grid search can be added if needed)
     pipeline.fit(X_train, y_train)
     
     print("✅ Training completed!")
+    return pipeline
 
 
-# ============================================================================
-# STEP 4: EVALUATE MODEL
-# ============================================================================
-
-def evaluate_model(pipeline: Pipeline, 
-                  X_test: list, 
-                  y_test: np.ndarray, 
-                  label_encoder: LabelEncoder):
-    """
-    Evaluate model performance on test data.
-    
-    Why evaluate on test data?
-    ---------------------------
-    We need to see how the model performs on NEW data it hasn't seen.
-    Training accuracy can be misleading (model might just memorize).
-    
-    Metrics explained:
-    ------------------
-    - Accuracy: % of correct predictions (e.g., 0.85 = 85% correct)
-    - Precision: Of predictions for a category, how many were correct?
-    - Recall: Of all actual transactions in a category, how many did we find?
-    - F1-score: Harmonic mean of precision and recall (balanced metric)
-    
-    Parameters:
-    -----------
-    pipeline : Pipeline
-        Trained model
-    X_test : list
-        Test descriptions
-    y_test : np.ndarray
-        True test labels
-    label_encoder : LabelEncoder
-        For converting numbers back to category names
-    """
-    print("\n" + "="*60)
+def evaluate_model(pipeline, X_test, y_test, label_encoder):
+    """Evaluate model with detailed metrics"""
+    print(f"\n{'='*60}")
     print("📊 EVALUATING MODEL PERFORMANCE")
     print("="*60)
     
@@ -400,44 +377,20 @@ def evaluate_model(pipeline: Pipeline,
     for i, row in enumerate(cm):
         print(f"{target_names[i][:12]:12s}", "  ".join(f"{val:4d}" for val in row))
     
-    # Show some example predictions
-    print("\n🔍 Sample Predictions:")
+    # Sample predictions
+    print(f"\n🔍 Sample Predictions:")
     print("="*60)
-    for i in range(min(5, len(X_test))):
+    for i in range(min(10, len(X_test))):
         true_cat = label_encoder.inverse_transform([y_test[i]])[0]
         pred_cat = label_encoder.inverse_transform([y_pred[i]])[0]
         correct = "✓" if true_cat == pred_cat else "✗"
-        print(f"{correct} '{X_test[i][:40]:40s}' → Predicted: {pred_cat:15s} (True: {true_cat})")
+        proba = pipeline.predict_proba([X_test[i]])[0].max()
+        print(f"{correct} '{X_test[i][:40]:40s}' → {pred_cat:15s} (confidence: {proba:.2f}, true: {true_cat})")
 
 
-# ============================================================================
-# STEP 5: SAVE MODEL
-# ============================================================================
-
-def save_model(pipeline: Pipeline, label_encoder: LabelEncoder, filepath: str):
-    """
-    Save trained model to disk.
-    
-    What gets saved?
-    ----------------
-    - The entire pipeline (TF-IDF + Classifier)
-    - The label encoder (for converting numbers ↔ category names)
-    
-    We use joblib instead of pickle because:
-    - More efficient for large numpy arrays
-    - Better compression
-    - Safer (less prone to security issues)
-    
-    Parameters:
-    -----------
-    pipeline : Pipeline
-        Trained model pipeline
-    label_encoder : LabelEncoder
-        Fitted label encoder
-    filepath : str
-        Output file path (e.g., 'model.joblib')
-    """
-    print("\n" + "="*60)
+def save_model(pipeline, label_encoder, filepath: str):
+    """Save trained model"""
+    print(f"\n{'='*60}")
     print("💾 SAVING MODEL")
     print("="*60)
     
@@ -448,10 +401,11 @@ def save_model(pipeline: Pipeline, label_encoder: LabelEncoder, filepath: str):
         'pipeline': pipeline,
         'label_encoder': label_encoder,
         'categories': label_encoder.classes_.tolist(),
-        'version': '1.0.0',
+        'version': '2.0.0',
         'features': {
             'max_features': MAX_FEATURES,
-            'ngram_range': NGRAM_RANGE
+            'ngram_range': NGRAM_RANGE,
+            'class_weight': 'balanced'
         }
     }
     
@@ -459,13 +413,9 @@ def save_model(pipeline: Pipeline, label_encoder: LabelEncoder, filepath: str):
     # compress=3: Good balance between compression and speed
     joblib.dump(model_bundle, filepath, compress=3)
     
-    # Verify file was created
-    file_size = os.path.getsize(filepath) / 1024  # Convert to KB
-    print(f"✅ Model saved successfully! (Size: {file_size:.1f} KB)")
-    print(f"\n📌 Model includes:")
-    print(f"   - TF-IDF Vectorizer (vocabulary: {len(pipeline.named_steps['tfidf'].vocabulary_)} words)")
-    print(f"   - Logistic Regression Classifier")
-    print(f"   - Label Encoder ({len(label_encoder.classes_)} categories)")
+    import os
+    file_size = os.path.getsize(filepath) / 1024
+    print(f"✅ Model saved! (Size: {file_size:.1f} KB)")
 
 
 # ============================================================================
@@ -473,90 +423,79 @@ def save_model(pipeline: Pipeline, label_encoder: LabelEncoder, filepath: str):
 # ============================================================================
 
 def main():
-    """
-    Main training workflow.
+    print(f"\n{'='*60}")
+    print("🚀 ENHANCED MODEL TRAINING")
+    print(f"{'='*60}")
     
-    Orchestrates all steps:
-    1. Load data
-    2. Preprocess
-    3. Split train/test
-    4. Build model
-    5. Train
-    6. Evaluate
-    7. Save
-    """
-    print("\n" + "="*60)
-    print("🚀 STARTING MODEL TRAINING")
-    print("="*60)
+    # Load data
+    df = load_training_data(TRAIN_DATA_PATH)
+    if df is None:
+        return
+    
+    explore_data(df)
+    
+    # Preprocess
+    print(f"\n{'='*60}")
+    print("🧹 PREPROCESSING DATA")
+    print(f"{'='*60}")
+    
+    descriptions = df['description'].tolist()
+    categories = df['category'].tolist()
+    
+    print("📝 Cleaning text descriptions...")
+    cleaned_descriptions = preprocess_descriptions(descriptions)
+    
+    print("\n🔍 Cleaning examples:")
+    for i in range(min(3, len(descriptions))):
+        print(f"  Before: {descriptions[i][:50]}")
+        print(f"  After:  {cleaned_descriptions[i][:50]}\n")
+    
+    # Encode labels
+    print("🔢 Encoding category labels...")
+    label_encoder = LabelEncoder()
+    encoded_labels = label_encoder.fit_transform(categories)
+    
+    print(f"✅ Encoded {len(label_encoder.classes_)} categories:")
+    for idx, cat in enumerate(label_encoder.classes_):
+        print(f"  {idx} → {cat}")
+    
+    # Split data
+    print(f"\n{'='*60}")
+    print("✂️  SPLITTING DATA")
+    print(f"{'='*60}")
     
     try:
-        # STEP 1: Load data
-        df = load_training_data(TRAIN_DATA_PATH)
-        explore_data(df)
-        
-        # STEP 2: Preprocess
-        X, y, label_encoder = preprocess_training_data(df)
-        
-        # STEP 3: Split data
-        print("\n" + "="*60)
-        print("✂️  SPLITTING DATA")
-        print("="*60)
-        print(f"📊 Splitting into train/test sets ({int((1-TEST_SIZE)*100)}% / {int(TEST_SIZE*100)}%)...")
+        X_train, X_test, y_train, y_test = train_test_split(
+            cleaned_descriptions, encoded_labels,
+            test_size=TEST_SIZE,
+            random_state=RANDOM_STATE,
+            stratify=encoded_labels
+        )
+        print(f"✅ Training: {len(X_train)} | Test: {len(X_test)}")
+        do_evaluate = True
+    except ValueError:
+        print("⚠️  Dataset too small for split, using full dataset")
+        X_train, y_train = cleaned_descriptions, encoded_labels
+        X_test, y_test = [], []
+        do_evaluate = False
+    
+    # Build and train
+    pipeline = build_model_pipeline()
+    pipeline = train_model_with_cv(pipeline, X_train, y_train)
+    
+    # Evaluate
+    if do_evaluate and len(X_test) > 0:
+        evaluate_model(pipeline, X_test, y_test, label_encoder)
+    
+    # Save
+    save_model(pipeline, label_encoder, MODEL_OUTPUT_PATH)
+    
+    print(f"\n{'='*60}")
+    print("🎉 TRAINING COMPLETED!")
+    print(f"{'='*60}")
+    print(f"✅ Model: {MODEL_OUTPUT_PATH}")
+    print(f"✅ Ready for production use!")
 
-        try:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y,
-                test_size=TEST_SIZE,
-                random_state=RANDOM_STATE,
-                stratify=y  # Ensure balanced split across categories
-            )
-            print(f"✅ Training set: {len(X_train)} transactions")
-            print(f"✅ Test set: {len(X_test)} transactions")
-            do_evaluate = True
-        except ValueError as e:
-            # Fallback for very small datasets where stratified split is not possible
-            print(f"\n⚠️  Stratified split failed: {str(e)}")
-            print("➡️  Falling back to training on the full dataset without a test split.")
-            X_train, y_train = X, y
-            X_test, y_test = [], np.array([])
-            do_evaluate = False
-
-        # STEP 4: Build model
-        pipeline = build_model_pipeline()
-        
-        # STEP 5: Train
-        train_model(pipeline, X_train, y_train)
-        
-        # STEP 6: Evaluate (only if we have a valid test split)
-        if do_evaluate and len(X_test) > 0:
-            evaluate_model(pipeline, X_test, y_test, label_encoder)
-        else:
-            print("\n" + "="*60)
-            print("ℹ️  Skipping evaluation due to insufficient test set.")
-            print("="*60)
-        
-        # STEP 7: Save
-        save_model(pipeline, label_encoder, MODEL_OUTPUT_PATH)
-        
-        print("\n" + "="*60)
-        print("🎉 TRAINING COMPLETED SUCCESSFULLY!")
-        print("="*60)
-        print(f"\n✅ Model saved to: {MODEL_OUTPUT_PATH}")
-        print(f"✅ Ready to use in app.py")
-        print(f"\n🚀 Next steps:")
-        print(f"   1. Start the API: python -m uvicorn app:app --reload")
-        print(f"   2. Test predictions: curl -X POST http://localhost:8001/predict ...")
-        
-    except Exception as e:
-        print(f"\n❌ Training failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
-
-# ============================================================================
-# RUN TRAINING
-# ============================================================================
 
 if __name__ == "__main__":
     main()
