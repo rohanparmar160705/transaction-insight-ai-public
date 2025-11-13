@@ -36,7 +36,7 @@ backend/node_modules/
 backend/uploads/
 backend/prisma/*.db
 backend/prisma/migrations/
-
+backend/.env
 backend/package-lock.json
 
 # ===================================================
@@ -45,6 +45,7 @@ backend/package-lock.json
 frontend/node_modules/
 frontend/dist/
 frontend/package-lock.json
+frontend/.env
 
 # ===================================================
 # ML SERVICE (Python + FastAPI)
@@ -55,6 +56,7 @@ ml-service/*.joblib
 ml-service/*.pkl
 ml-service/*.csv
 ml-service/*.log
+ml-service/.env
 
 # ===================================================
 # DOCKER / JENKINS
