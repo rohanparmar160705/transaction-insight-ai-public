@@ -1,0 +1,104 @@
+# ===================================================
+# GLOBAL SETTINGS
+# ===================================================
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node and Python lockfiles (kept only one canonical version)
+package-lock.json
+Pipfile.lock
+
+# Build and cache directories
+dist/
+build/
+.cache/
+coverage/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ===================================================
+# BACKEND (Node.js + Express + Prisma)
+# ===================================================
+backend/node_modules/
+backend/uploads/
+backend/prisma/*.db
+backend/prisma/migrations/
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/package-lock.json
+
+# ===================================================
+# FRONTEND (React + Vite + Tailwind)
+# ===================================================
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/package-lock.json
+
+# ===================================================
+# ML SERVICE (Python + FastAPI)
+# ===================================================
+ml-service/__pycache__/
+ml-service/venv/
+ml-service/.env
+ml-service/.env.*
+!ml-service/.env.example
+ml-service/*.joblib
+ml-service/*.pkl
+ml-service/*.csv
+ml-service/*.log
+
+# ===================================================
+# DOCKER / JENKINS
+# ===================================================
+# Ignore docker build cache and volumes
+**/docker-compose.override.yml
+**/Dockerfile.old
+**/.docker/
+**/.dockerignore
+
+# Jenkins
+**/workspace/
+**/jenkins_home/
+**/.jenkins/
+
+# ===================================================
+# OTHER
+# ===================================================
+# Ignore Python virtual environment folders globally
+venv/
+env/
+ENV/
+*.egg-info/
+.eggs/
+site/
+
+# Ignore local data / analytics / scratch files
+*.db
+*.sqlite3
+*.csv
+*.tsv
+*.xls
+*.xlsx
+
+# ===================================================
+# END OF FILE
+# ===================================================

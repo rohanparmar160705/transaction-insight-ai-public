@@ -1,0 +1,94 @@
+// Prisma Schema for Transaction Insight AI
+// This defines our database models and relationships
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("DATABASE_SHADOW_URL")
+}
+
+// User model - stores user authentication and profile information
+model User {
+  id            String        @id @default(uuid())
+  email         String        @unique
+  password      String        // Hashed with bcrypt
+  name          String
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  
+  // Relationships
+  transactions  Transaction[]
+  uploads       Upload[]
+  
+  @@map("users")
+}
+
+// Transaction model - stores individual bank transactions
+model Transaction {
+  id                    String    @id @default(uuid())
+  userId                String
+  uploadId              String?   // Optional: link to the upload batch
+  
+  // Transaction details
+  date                  DateTime
+  description           String
+  amount                Float
+  type                  TransactionType  // DEBIT or CREDIT
+  
+  // ML predictions
+  category              String    // Predicted category (e.g., "Food", "Transport")
+  predictionConfidence  Float     // Confidence score from ML model (0-1)
+  
+  // Metadata
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  // Relationships
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  upload                Upload?   @relation(fields: [uploadId], references: [externalId], onDelete: SetNull)
+  
+  @@index([userId])
+  @@index([date])
+  @@index([category])
+  @@map("transactions")
+}
+
+// Upload model - tracks file uploads for auditing
+model Upload {
+  id            String        @id @default(uuid())
+  externalId    String        @unique
+  userId        String
+  fileName      String
+  fileType      String        // CSV or PDF
+  fileSize      Int
+  status        UploadStatus  @default(PROCESSING)
+  errorMessage  String?
+  
+  transactionCount Int?        // Number of transactions extracted
+  
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  
+  // Relationships
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+  
+  @@index([userId])
+  @@map("uploads")
+}
+
+// Enums
+enum TransactionType {
+  DEBIT
+  CREDIT
+}
+
+enum UploadStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
