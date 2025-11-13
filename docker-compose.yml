@@ -1,60 +1,58 @@
 version: "3.9"
 
 services:
+  # =====================
+  # PostgreSQL Database
+  # =====================
   postgres:
     image: postgres:15
     container_name: tia-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pass
+      POSTGRES_USER: transaction_user_rohan123
+      POSTGRES_PASSWORD: transaction_pass_rohan123
       POSTGRES_DB: transaction_insight
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d transaction_insight"]
+      test: ["CMD-SHELL", "pg_isready -U transaction_user_rohan123 -d transaction_insight"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # =====================
+  # Machine Learning Service
+  # =====================
   ml-service:
     build:
       context: ./ml-service
     container_name: tia-ml-service
     restart: unless-stopped
-    environment:
-      PORT: 8000
-      HOST: 0.0.0.0
-      MODEL_PATH: /app/model.joblib
-      CORS_ORIGINS: "*"
+    env_file:
+      - ./ml-service/.env
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO", "-", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 5
 
+  # =====================
+  # Backend (Express + Prisma)
+  # =====================
   backend:
     build:
       context: ./backend
     container_name: tia-backend
     restart: unless-stopped
-    environment:
-      PORT: 5000
-      NODE_ENV: production
-      # Prisma connection to Postgres service
-      DATABASE_URL: postgresql://user:pass@postgres:5432/transaction_insight?schema=public
-      DATABASE_SHADOW_URL: postgresql://user:pass@postgres:5432/transaction_shadow?schema=public
-      JWT_SECRET: super-secret-jwt-change-me
-      JWT_EXPIRY: 7d
-      ML_SERVICE_URL: http://ml-service:8000
-      MAX_FILE_SIZE: "10485760"
-      UPLOAD_DIR: /app/uploads
-      CORS_ORIGIN: http://localhost:3000
-      LOG_LEVEL: info
+    env_file:
+      - ./backend/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,20 +62,35 @@ services:
       - "5000:5000"
     volumes:
       - backend_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
 
+  # =====================
+  # Frontend (Vite + Nginx)
+  # =====================
   frontend:
     build:
       context: ./frontend
     container_name: tia-frontend
     restart: unless-stopped
-    environment:
-      # Frontend uses nginx to proxy /api -> backend:5000
-      VITE_API_URL: /api
+    env_file:
+      - ./frontend/.env
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
+# =====================
+# Named Volumes
+# =====================
 volumes:
   pgdata:
   backend_uploads:
